@@ -1,0 +1,114 @@
+:auto
+MATCH (n) 
+CALL {
+  WITH n
+  DETACH DELETE n
+} IN TRANSACTIONS OF 1000 ROWS;
+
+CREATE CONSTRAINT ClientConstraint IF NOT EXISTS FOR (p:Client) REQUIRE p.id IS UNIQUE;
+CREATE CONSTRAINT EmailConstraint IF NOT EXISTS FOR (p:Email) REQUIRE p.email IS UNIQUE;
+CREATE CONSTRAINT PhoneConstraint IF NOT EXISTS FOR (p:Phone) REQUIRE p.phoneNumber IS UNIQUE;
+CREATE CONSTRAINT SSNConstraint IF NOT EXISTS FOR (p:SSN) REQUIRE p.ssn IS UNIQUE;
+CREATE CONSTRAINT MerchantConstraint IF NOT EXISTS FOR (p:Merchant) REQUIRE p.id IS UNIQUE;
+CREATE CONSTRAINT BankConstraint IF NOT EXISTS FOR (p:Bank) REQUIRE p.id IS UNIQUE;
+CREATE CONSTRAINT TransactionConstraint IF NOT EXISTS FOR (p:Transaction) REQUIRE p.globalStep IS UNIQUE;
+CREATE CONSTRAINT DebitConstraint IF NOT EXISTS FOR (p:Transaction) REQUIRE p.globalStep IS UNIQUE;
+CREATE CONSTRAINT CashInConstraint IF NOT EXISTS FOR (p:CashIn) REQUIRE p.globalStep IS UNIQUE;
+CREATE CONSTRAINT CashOutConstraint IF NOT EXISTS FOR (p:CashOut) REQUIRE p.globalStep IS UNIQUE;
+CREATE CONSTRAINT TransferConstraint IF NOT EXISTS FOR (p:Transfer) REQUIRE p.globalStep IS UNIQUE;
+CREATE CONSTRAINT PaymentConstraint IF NOT EXISTS FOR (p:Payment) REQUIRE p.globalStep IS UNIQUE;
+
+LOAD CSV WITH HEADERS FROM 'file:///workshop-2500/clients.csv' AS row
+WITH row
+MERGE (c:Client { id: row.ID })
+SET c.name = row.NAME, c.isFraud = toBoolean(row.ISFRAUD)
+MERGE (p:Phone { phoneNumber: row.PHONENUMBER })
+MERGE (c)-[:HAS_PHONE]->(p)
+MERGE (s:SSN { ssn: row.SSN })
+MERGE (c)-[:HAS_SSN]->(s)
+MERGE (e:Email { email: row.EMAIL })
+MERGE (c)-[:HAS_EMAIL]->(e);
+
+LOAD CSV WITH HEADERS FROM 'file:///workshop-2500/merchants.csv' AS row
+WITH row
+MERGE (m:Merchant { id: row.ID })
+SET m.name = row.NAME, m.highRisk = toBoolean(row.HIGHRISK);
+
+// "ACTION","AMOUNT","GLOBALSTEP","IDDEST","IDORIG","ISFLAGGEDFRAUD","ISFRAUD","NAMEDEST","NAMEORIG","TYPEDEST","TYPEORIG"
+// "DEBIT","6332.708230250739","324","B45-0009267","4368686667163582","false","false","Bank of Reed","Lily Strong","BANK","CLIENT"
+// "DEBIT","14642.692669956992","589","B48-0007948","4179690032303088","false","false","Bank of Burks","Blake Valenzuela","BANK","CLIENT"
+// Transfer, CashIn, CashOut, Debit, Payment
+
+LOAD CSV WITH HEADERS FROM 'file:///workshop-2500/debit.csv' AS row
+WITH row
+MERGE (b:Bank { id: row.IDDEST })
+SET b.name = row.NAMEDEST
+MERGE (c:Client { id: row.IDORIG })
+MERGE (t:Transaction:Debit { globalStep: row.GLOBALSTEP })
+SET t.amount = toFloat(row.AMOUNT), t.isFraud = toBoolean(row.ISFRAUD)
+MERGE (t)-[:TO]->(b)
+MERGE (c)-[:PERFORMED]->(t);
+
+LOAD CSV WITH HEADERS FROM 'file:///workshop-2500/cashin.csv' AS row
+WITH row
+MERGE (m:Merchant { id: row.IDDEST })
+SET m.name = row.NAMEDEST
+MERGE (c:Client { id: row.IDORIG })
+MERGE (t:Transaction:CashIn { globalStep: row.GLOBALSTEP })
+SET t.amount = toFloat(row.AMOUNT), t.isFraud = toBoolean(row.ISFRAUD)
+MERGE (t)-[:TO]->(m)
+MERGE (c)-[:PERFORMED]->(t);
+
+LOAD CSV WITH HEADERS FROM 'file:///workshop-2500/cashout.csv' AS row
+WITH row
+MERGE (m:Merchant { id: row.IDDEST })
+SET m.name = row.NAMEDEST
+MERGE (c:Client { id: row.IDORIG })
+SET c.name = row.NAMEORIG
+MERGE (t:Transaction:CashOut { globalStep: row.GLOBALSTEP })
+SET t.amount = toFloat(row.AMOUNT), t.isFraud = toBoolean(row.ISFRAUD)
+MERGE (t)-[:TO]->(m)
+MERGE (c)-[:PERFORMED]->(t);
+
+LOAD CSV WITH HEADERS FROM 'file:///workshop-2500/payment.csv' AS row
+WITH row
+MERGE (m:Merchant { id: row.IDDEST })
+SET m.name = row.NAMEDEST
+MERGE (c:Client { id: row.IDORIG })
+SET c.name = row.NAMEORIG
+MERGE (t:Transaction:Payment { globalStep: row.GLOBALSTEP })
+SET t.amount = toFloat(row.AMOUNT), t.isFraud = toBoolean(row.ISFRAUD)
+MERGE (t)-[:TO]->(m)
+MERGE (c)-[:PERFORMED]->(t)
+FOREACH (ignoreMe in CASE WHEN row.TYPEORIG = 'MULE' THEN [1] ELSE [] END | SET c :Mule);
+
+LOAD CSV WITH HEADERS FROM 'file:///workshop-2500/transfer.csv' AS row
+WITH row
+MERGE (cd:Client { id: row.IDDEST })
+SET cd.name = row.NAMEDEST
+MERGE (co:Client { id: row.IDORIG })
+SET co.name = row.NAMEORIG
+MERGE (t:Transaction:Transfer { globalStep: row.GLOBALSTEP })
+SET t.amount = toFloat(row.AMOUNT), t.isFraud = toBoolean(row.ISFRAUD)
+MERGE (t)-[:TO]->(cd)
+MERGE (co)-[:PERFORMED]->(t)
+FOREACH (ignoreMe in CASE WHEN row.TYPEDEST = 'MULE' THEN [1] ELSE [] END | SET cd :Mule)
+FOREACH (ignoreMe in CASE WHEN row.TYPEORIG = 'MULE' THEN [1] ELSE [] END | SET co :Mule);
+
+:auto
+MATCH (c:Client) with c.id as clientId
+CALL {
+  WITH clientId
+  MATCH (c:Client {id: clientId})-[:PERFORMED]->(tx:Transaction)
+  WITH c, tx ORDER BY tx.globalStep
+  WITH c, collect(tx) AS txs
+  WITH c, txs, head(txs) AS _start, last(txs) AS _last
+
+  MERGE (c)-[:FIRST_TX]->(_start)
+  MERGE (c)-[:LAST_TX]->(_last)
+  WITH c, apoc.coll.pairsMin(txs) AS pairs
+
+  UNWIND pairs AS pair
+    WITH pair[0] AS a, pair[1] AS b
+    MERGE (a)-[n:NEXT]->(b)
+} IN TRANSACTIONS OF 5 ROWS;

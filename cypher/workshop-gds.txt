@@ -1,0 +1,157 @@
+///////////////////////
+// GDS Script for PaySim demo
+///////////////////////
+
+///////////////////////
+// Depending on the size of the dataset, your fraud ring will be big or not. For 1.8m nodes, suspicious rings will be with a size > 3. For 5.5m nodes, size > 8
+:param groupSize => 2;
+
+///////////////////////
+// Drop the graph in case it is a rerun
+CALL gds.graph.drop('wccGroups', false) YIELD graphName;
+
+///////////////////////
+// Create a graph with Client details only
+CALL gds.graph.project('wccGroups',
+    ['Client', 'SSN', 'Email', 'Phone'],
+    ['HAS_SSN', 'HAS_EMAIL', 'HAS_PHONE']);
+	
+///////////////////////
+// Call the WCC algorithm using our native graph projection
+CALL gds.wcc.stream('wccGroups') YIELD nodeId, componentId
+WITH componentId, collect(gds.util.asNode(nodeId).id) AS clients     // Fetch the Node instance from the db and use its PaySim id
+WITH *, size(clients) as groupSize WHERE groupSize > 1               // Identify groups where there are at least 2 clients
+RETURN * ORDER BY groupSize DESC LIMIT 1000;
+
+///////////////////////
+// Call the WCC algorithm using our native graph projection
+CALL gds.wcc.stream('wccGroups') YIELD nodeId, componentId
+WITH componentId, collect(gds.util.asNode(nodeId).id) AS clientIds       // Fetch the Node instance from the db and use its PaySim id
+WITH *, size(clientIds) AS groupSize WHERE groupSize > 1                 // Note that in this case, clients is a list of paysim ids.
+UNWIND clientIds AS clientId                                             // Let's unwind the list, MATCH, and tag them individually.
+    MATCH (c:Client {id:clientId})
+    SET c.fraud_group = componentId;
+
+///////////////////////
+// Create an index on the new property
+CREATE INDEX ClientFraudIndex IF NOT EXISTS FOR (c:Client) on c.fraud_group;
+
+///////////////////////
+// MATCH only our tagged Clients and group them by group size
+MATCH (c:Client) WHERE c.fraud_group IS NOT NULL
+WITH c.fraud_group AS groupId, collect(c.id) AS members
+WITH groupId, size(members) AS groupSize
+WITH collect(groupId) AS groupsOfSize, groupSize
+RETURN groupSize, size(groupsOfSize) AS numOfGroups
+ORDER BY groupSize DESC;
+
+///////////////////////
+// Visualize the larger likely-fraudulent groups
+MATCH (c:Client) WHERE c.fraud_group IS NOT NULL
+WITH c.fraud_group AS groupId, collect(c.id) AS members
+WITH *, size(members) AS groupSize WHERE groupSize > $groupSize
+MATCH p=(c:Client {fraud_group:groupId})-[:HAS_SSN|HAS_EMAIL|HAS_PHONE]->()
+RETURN p;
+
+///////////////////////
+// Recall our tagged Clients and group them by group size
+MATCH (c:Client) WHERE c.fraud_group IS NOT NULL
+WITH c.fraud_group AS groupId, collect(c.id) AS members
+WITH groupId, size(members) AS groupSize WHERE groupSize > $groupSize
+MATCH p=(:Client {fraud_group:groupId})-[]-(:Transaction)-[]-(c:Client)        // Expand our search to Clients one Transaction away
+WHERE c.fraud_group IS NULL
+RETURN p;
+
+///////////////////////
+// Recall our tagged Clients and group them by group size
+MATCH (c:Client) WHERE c.fraud_group IS NOT NULL
+WITH c.fraud_group AS groupId, collect(c.id) AS members
+WITH groupId, size(members) AS groupSize WHERE groupSize > $groupSize
+MATCH (:Client {fraud_group:groupId})-[]-(txn:Transaction)-[]-(c:Client)      // Build our network as before
+WHERE c.fraud_group IS NULL
+UNWIND labels(txn) AS txnType                                                 // Since our PaySim demo stacks labels, let's look at our txn reference
+RETURN distinct(txnType), count(txnType);
+	
+///////////////////////
+// Recall our tagged Clients and group them by group size
+MATCH (c:Client) WHERE c.fraud_group IS NOT NULL
+WITH c.fraud_group AS groupId, collect(c.id) AS members
+WITH groupId, size(members) AS groupSize WHERE groupSize > $groupSize
+MATCH (c1:Client {fraud_group:groupId})-[]-(t:Transaction)-[]-(c2:Client)     // Expand our search to Clients one Transaction away
+WHERE c2.fraud_group IS NULL
+SET c1.suspect = true, c2.suspect = true                                      // Set these Clients as suspects for easier recall
+MERGE (c1)-[r:TRANSACTED_WITH]->(c2)                                          // Merge a relationship directly between Clients and copy some of the Transaction properties over in case we need them.
+ON CREATE SET r += t
+RETURN count(r);
+
+///////////////////////
+// Display a graph of our suspects
+MATCH (c1:Client {suspect:true})-[r:TRANSACTED_WITH]-(c2:Client) RETURN c1,r,c2;
+
+///////////////////////
+// Drop the graph in case of a rerun
+CALL gds.graph.drop('wccGroups2', false) YIELD graphName;
+
+///////////////////////
+// Create projection just with suspects
+CALL gds.graph.project.cypher(
+	'wccGroups2',
+    'MATCH (c:Client {suspect:true}) RETURN id(c) AS id',
+    'MATCH (c1:Client {suspect:true})-[r:TRANSACTED_WITH]->(c2:Client) RETURN id(c1) AS source, id(c2) as target'
+) YIELD graphName AS graph, nodeQuery, nodeCount AS nodes, relationshipQuery, relationshipCount AS rels;
+
+///////////////////////
+// Run a WCC just on suspects
+CALL gds.wcc.write('wccGroups2', { writeProperty: 'fraud_group_2' });
+
+///////////////////////
+// Create an index on the new property
+CREATE INDEX ClientFraud2Index IF NOT EXISTS FOR (c:Client) on c.fraud_group_2;
+
+///////////////////////
+// Recall our tagged Clients and group them by group size
+MATCH (c:Client) WHERE c.fraud_group_2 IS NOT NULL
+WITH c.fraud_group_2 AS secondGroupId, collect(c.id) AS members
+RETURN secondGroupId, size(members) AS groupSize
+ORDER BY groupSize DESC;
+
+///////////////////////
+// Drop the graph in case of a rerun
+CALL gds.graph.drop('betweenness', false) YIELD graphName;
+
+///////////////////////
+// Create projection just with the final list of suspects
+CALL gds.graph.project.cypher(
+	'betweenness',
+    'MATCH (c:Client) WHERE c.fraud_group_2 IS NOT NULL WITH c.fraud_group_2 AS secondGroupId, collect(c.id) AS members
+WITH secondGroupId, size(members) AS groupSize ORDER BY groupSize DESC LIMIT 1 WITH secondGroupId MATCH (c:Client {fraud_group_2:secondGroupId})-[r:TRANSACTED_WITH]-(c2:Client) RETURN id(c) AS id',
+    'MATCH (c:Client) WHERE c.fraud_group_2 IS NOT NULL WITH c.fraud_group_2 AS secondGroupId, collect(c.id) AS members
+WITH secondGroupId, size(members) AS groupSize ORDER BY groupSize DESC LIMIT 1 WITH secondGroupId MATCH (c1:Client {fraud_group_2:secondGroupId})-[:TRANSACTED_WITH]-(c2:Client) RETURN id(c1) AS source, id(c2) AS target'
+) YIELD graphName AS graph, nodeQuery, nodeCount AS nodes, relationshipQuery, relationshipCount AS rels;
+
+///////////////////////
+// Target just our largest fraud group (group 1) using a Cypher projection
+CALL gds.betweenness.stream('betweenness') YIELD nodeId, score
+WITH gds.util.asNode(nodeId) AS c, score WHERE score > 0                       // Fetch the node and also filter out nodes with scores of 0
+RETURN c.name AS name, score ORDER BY score DESC;                              // Return the name and order by score
+
+///////////////////////
+// Same procedure call as before
+CALL gds.betweenness.stream('betweenness') YIELD nodeId, score
+WITH gds.util.asNode(nodeId) AS c, score WHERE score > 0                       // Filter 0 scores again
+MATCH (c)-[r:TRANSACTED_WITH]-(:Client)                                        // Retrieve the relationships
+WITH c.name AS name, score, collect(r) AS txns                                 // Collect and count the number of relationships
+WITH name, score AS original, score/size(txns) AS newScore
+RETURN name, newScore, original ORDER BY newScore DESC;                         // Our score is now scaled inversely to the number of relationships
+	
+///////////////////////
+// Display a graph of our suspects
+CALL gds.betweenness.stream('betweenness') YIELD nodeId, score
+WITH gds.util.asNode(nodeId) AS c, score WHERE score > 0                       // Filter 0 scores again
+MATCH (c)-[r:TRANSACTED_WITH]-(:Client)                                        // Retrieve the relationships
+WITH c, score, collect(r) AS txns                                 // Collect and count the number of relationships
+WITH c, score AS original, score/size(txns) AS newScore
+WITH c, newScore, original ORDER BY newScore DESC LIMIT 1   
+MATCH (c)-[r:TRANSACTED_WITH*]-(cc:Client)
+RETURN c,r,cc;
+	
