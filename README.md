@@ -10,9 +10,13 @@ We have chose to create a workshop which can be used for
 - Asia Virtual Series
 - Client meetings
 
-The topic is fraud. We will use the Paysim dataset
+The topic is fraud. We will use the Paysim dataset.
+
 We will use Dave Voutila posts from 2020:
-[Part 1](https://www.sisu.io/posts/paysim/), [Part 2](https://www.sisu.io/posts/paysim-part2/) and [Part 3](https://www.sisu.io/posts/paysim-part3/)
+[Part 1](https://www.sisu.io/posts/paysim/), [Part 2](https://www.sisu.io/posts/paysim-part2/) and [Part 3](https://www.sisu.io/posts/paysim-part3/).
+
 We used the repo [here](https://github.com/voutilad/paysim-demo) to generate a dataset small enough to be quick to load and big enough to have nice stories.
-We need a little bit of postprocessing to make the datasets easier to load (split the transactions.csv file into different types of transactions)
-And then we can follow the script created by Dave, looking for key people at the middle of the a fraud ring.
+
+We need a little bit of postprocessing to make the datasets easier to load (split the transactions.csv file into different types of transactions).
+
+We can follow the script created by Dave, looking for key people at the middle of the a fraud ring.
