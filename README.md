@@ -9,6 +9,7 @@ We have chose to create a workshop which can be used for
 - Graph Summit 2023
 - Asia Virtual Series
 - Client meetings
+
 The topic is fraud. We will use the Paysim dataset
 We will use Dave Voutila posts from 2020:
 [Part 1](https://www.sisu.io/posts/paysim/), [Part 2](https://www.sisu.io/posts/paysim-part2/) and [Part 3](https://www.sisu.io/posts/paysim-part3/)
