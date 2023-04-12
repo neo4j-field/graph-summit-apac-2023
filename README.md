@@ -20,3 +20,11 @@ We used the repo [here](https://github.com/voutilad/paysim-demo) to generate a d
 We need a little bit of postprocessing to make the datasets easier to load (split the transactions.csv file into different types of transactions).
 
 We can follow the script created by Dave, looking for key people at the middle of the a fraud ring.
+
+## Script
+
+### Explaining the data set
+
+### Building the demo environment
+
+### Run some Cypher queries on your Graph database from Python
