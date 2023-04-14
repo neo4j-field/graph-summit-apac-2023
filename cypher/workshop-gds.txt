@@ -4,7 +4,7 @@
 
 ///////////////////////
 // Depending on the size of the dataset, your fraud ring will be big or not. For 1.8m nodes, suspicious rings will be with a size > 3. For 5.5m nodes, size > 8
-:param groupSize => 4;
+:param groupSize => 3;
 
 ///////////////////////
 // Drop the graph in case it is a rerun
